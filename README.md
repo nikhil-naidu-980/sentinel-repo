@@ -21,7 +21,7 @@ export AWS_REGION="us-west-2"
 chmod +x ./scripts/initial-setup.sh && ./scripts/initial-setup.sh
 ```
 
-### 4. Update the s3 bucket name in ./terraform/environments/backend.tf
+#### 4. Update the s3 bucket name in ./terraform/environments/backend.tf
 ```bash
 terraform {
     backend "s3" {
@@ -63,7 +63,7 @@ export AWS_REGION="us-west-2"
 chmod +x ./scripts/initial-setup.sh && ./scripts/initial-setup.sh
 ```
 
-### 4. Update the s3 bucket name in ./terraform/environments/backend.tf
+#### 4. Update the s3 bucket name in ./terraform/environments/backend.tf
 ```bash
 terraform {
     backend "s3" {
@@ -75,7 +75,7 @@ terraform {
 }
 ```
 
-### 5. Initialize Terraform, plan and apply
+#### 5. Initialize Terraform, plan and apply
 ```bash
 cd terraform/environments/dev
 terraform init
@@ -89,7 +89,7 @@ aws eks update-kubeconfig --name eks-gateway --region us-west-2
 aws eks update-kubeconfig --name eks-backend --region us-west-2
 ```
 
-### 7. Build Images and Deploy applications
+#### 7. Build Images and Deploy applications
 ```bash
 Terraform ouputs the ECR_URL for both registries
 
@@ -263,6 +263,42 @@ echo "$GATEWAY_URL"
   6. Delete CloudWatch Log Groups
   7. Remove IAM roles from Terraform state
   8. Run terraform destroy
+
+#  Trade-offs and Design Decisions
+ 
+  **VPC Peering vs Transit Gateway:**
+  - Chose VPC Peering for simplicity and cost
+  - Transit Gateway would be better for 3+ VPCs but adds cost and complexity
+  - Current design sufficient for two-VPC architecture
+
+  **Load Balancer Type: NLB vs ALB:**
+  - Network Load Balancer chosen for lower cost
+  - Layer 4 load balancing sufficient for simple HTTP proxying
+  - ALB features (path routing, WAF) not needed for this use case
+
+  **Monitoring: CloudWatch Logs Only:**
+  - Full observability stack (Prometheus/Grafana) not implemented
+  - CloudWatch sufficient for debugging and basic monitoring
+
+  **Permissions and roles:**
+  - I have a working config running with Github OIDC instead of storing long lived secrets in GH actions
+  - But that would need me to create a new role in IAM and create ARN
+
+ ## Cost Optimization
+  - Can use spot nodes to reduce the compute cost
+  - Single NAT is used to save costs instead of using 2
+  - VPC peering pretty much have no cost compared to Transit gateway
+  - Can use small nodes instead of t3.medium
+
+# Future Enhancement
+
+ - **TLS:** All communication should be encrypted with TLS on production, might need issuer controllers
+ - **Observability:** For better logging and debugging. This will enable us to get better monitoring and alerting. Can use Grafana and Prometheus for example
+ - **GitOps:** GitOps style deployment funcationlity using ArgoCD. It will also enable self healing and auto sync on all git commits. This will also enable easy rollbacks.
+ - **Transit Gateway:** If we are scaling beyond 2/3 VPC, it's better to migrate to Transit Gateway for hub and spoke topology.
+ - **Disaster Recovery:** We can have primary infra in us-west-2 and a DR infra in another region with Routes3 health checks with automatic failover
+ - **Secret Management:** Sync secrets from AWS secret manager or Vault, to store sensitive data or credentials 
+ - **Second Container Registry:** If we enable secrete handling correctly, we can also push the images to a second container registry. In case of an incident, it would be helpful.
 
 
 
