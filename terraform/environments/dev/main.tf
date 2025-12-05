@@ -30,27 +30,6 @@ locals {
   }
 }
 
-# Import pre-existing IAM roles that cannot be deleted due to permissions
-import {
-  to = module.eks_backend.aws_iam_role.eks_cluster_role
-  id = "eks-backend-eks-cluster-role"
-}
-
-import {
-  to = module.eks_backend.aws_iam_role.eks_node_role
-  id = "eks-backend-eks-node-role"
-}
-
-import {
-  to = module.eks_gateway.aws_iam_role.eks_cluster_role
-  id = "eks-gateway-eks-cluster-role"
-}
-
-import {
-  to = module.eks_gateway.aws_iam_role.eks_node_role
-  id = "eks-gateway-eks-node-role"
-}
-
 # VPC - Gateway
 module "vpc_gateway" {
   source             = "../../modules/vpc"

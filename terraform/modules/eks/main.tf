@@ -34,7 +34,7 @@ resource "aws_iam_role" "eks_cluster_role" {
   })
 
   lifecycle {
-    ignore_changes  = [tags, tags_all]
+    ignore_changes = [tags, tags_all]
   }
 }
 
@@ -135,7 +135,7 @@ resource "aws_iam_role" "eks_node_role" {
   })
 
   lifecycle {
-    ignore_changes  = [tags, tags_all]
+    ignore_changes = [tags, tags_all]
   }
 }
 
