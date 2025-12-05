@@ -30,7 +30,12 @@ locals {
   }
 }
 
-# Import pre-existing IAM roles (only the ones that exist in AWS)
+# Import pre-existing IAM roles that persist across destroy cycles
+import {
+  to = module.eks_backend.aws_iam_role.eks_cluster_role
+  id = "eks-backend-eks-cluster-role"
+}
+
 import {
   to = module.eks_backend.aws_iam_role.eks_node_role
   id = "eks-backend-eks-node-role"
