@@ -30,6 +30,22 @@ locals {
   }
 }
 
+# Import pre-existing IAM roles (only the ones that exist in AWS)
+import {
+  to = module.eks_backend.aws_iam_role.eks_node_role
+  id = "eks-backend-eks-node-role"
+}
+
+import {
+  to = module.eks_gateway.aws_iam_role.eks_cluster_role
+  id = "eks-gateway-eks-cluster-role"
+}
+
+import {
+  to = module.eks_gateway.aws_iam_role.eks_node_role
+  id = "eks-gateway-eks-node-role"
+}
+
 # VPC - Gateway
 module "vpc_gateway" {
   source             = "../../modules/vpc"
