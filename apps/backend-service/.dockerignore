@@ -1,0 +1,9 @@
+.git
+.gitignore
+node_modules
+npm-debug.log
+yarn-error.log
+.npm
+README.md
+*.md
+.github

@@ -1,0 +1,13 @@
+{
+  "name": "sentinel-gateway-proxy",
+  "version": "1.0.0",
+  "description": "Gateway proxy for Sentinel split architecture",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0"
+  }
+}
