@@ -35,7 +35,7 @@ resource "aws_iam_role" "eks_cluster_role" {
 
   lifecycle {
     ignore_changes  = [tags, tags_all]
-    prevent_destroy = true 
+    prevent_destroy = true
   }
 }
 
@@ -137,7 +137,7 @@ resource "aws_iam_role" "eks_node_role" {
 
   lifecycle {
     ignore_changes  = [tags, tags_all]
-    prevent_destroy = true  
+    prevent_destroy = true
   }
 }
 
@@ -168,7 +168,7 @@ resource "aws_security_group" "eks_node_sg" {
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
-    Name                                           = "${local.cluster_name}-node-sg"
+    Name                                          = "${local.cluster_name}-node-sg"
     "kubernetes.io/cluster/${local.cluster_name}" = "owned"
   })
 }

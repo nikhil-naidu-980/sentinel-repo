@@ -105,7 +105,7 @@ resource "aws_route" "backend_to_gateway" {
 module "eks_gateway" {
   source                 = "../../modules/eks"
   cluster_name           = "eks-gateway"
-  iam_role_prefix        = "eks-gateway"  
+  iam_role_prefix        = "eks-gateway"
   kubernetes_version     = var.kubernetes_version
   vpc_id                 = module.vpc_gateway.vpc_id
   subnet_ids             = module.vpc_gateway.private_subnet_ids
@@ -124,7 +124,7 @@ module "eks_gateway" {
 module "eks_backend" {
   source                 = "../../modules/eks"
   cluster_name           = "eks-backend"
-  iam_role_prefix        = "eks-backend"  
+  iam_role_prefix        = "eks-backend"
   kubernetes_version     = var.kubernetes_version
   vpc_id                 = module.vpc_backend.vpc_id
   subnet_ids             = module.vpc_backend.private_subnet_ids

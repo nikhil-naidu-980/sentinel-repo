@@ -25,7 +25,7 @@ variable "backend_vpc_cidr" {
 
 variable "enable_flow_logs" {
   type    = bool
-  default = false  
+  default = false
 }
 
 variable "kubernetes_version" {
