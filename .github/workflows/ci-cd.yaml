@@ -1,0 +1,502 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_ecr:
+        description: 'Deploy ECR'
+        type: boolean
+        default: false
+      deploy_vpc:
+        description: 'Deploy VPC'
+        type: boolean
+        default: false
+      deploy_eks:
+        description: 'Deploy EKS'
+        type: boolean
+        default: false
+      deploy_k8s:
+        description: 'Deploy Kubernetes'
+        type: boolean
+        default: false
+      deploy_all:
+        description: 'Deploy All'
+        type: boolean
+        default: false
+      destroy_all:
+        description: "Destroy all Terraform-managed infrastructure"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  TF_DIR: terraform/environments/dev
+  PROJECT: sentinel
+  ENV: dev
+
+jobs:
+  
+  # Detect Changes
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.check.outputs.terraform }}
+      kubernetes: ${{ steps.check.outputs.kubernetes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check changes
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "terraform=${{ inputs.deploy_all || inputs.deploy_ecr || inputs.deploy_vpc || inputs.deploy_eks }}" >> $GITHUB_OUTPUT
+            echo "kubernetes=${{ inputs.deploy_all || inputs.deploy_k8s }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA=${{ github.event.pull_request.base.sha }}
+          else
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          fi
+          
+          # If no base commit (first commit in repo), deploy everything
+          if [[ -z "$BASE_SHA" ]]; then
+            echo "First commit detected - deploying all"
+            echo "terraform=true" >> $GITHUB_OUTPUT
+            echo "kubernetes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          TF_CHANGED=$(git diff --name-only $BASE_SHA ${{ github.sha }} | grep -q '^terraform/' && echo true || echo false)
+          K8S_CHANGED=$(git diff --name-only $BASE_SHA ${{ github.sha }} | grep -qE '^kubernetes/|^apps/' && echo true || echo false)
+          
+          echo "Terraform changed: $TF_CHANGED"
+          echo "Kubernetes changed: $K8S_CHANGED"
+          
+          echo "terraform=$TF_CHANGED" >> $GITHUB_OUTPUT
+          echo "kubernetes=$K8S_CHANGED" >> $GITHUB_OUTPUT
+
+  
+  # Terraform Lint & Validate
+  terraform-lint:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive terraform/
+        continue-on-error: true
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.0
+      - name: TFLint Run
+        run: |
+          cd terraform/modules/vpc && tflint --init && tflint || true
+          cd ../eks && tflint --init && tflint || true
+          cd ../ecr && tflint --init && tflint || true
+        continue-on-error: true
+
+  
+  # ECR
+  deploy-ecr:
+    needs: [detect-changes, terraform-lint]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.terraform == 'true' &&
+      (needs.terraform-lint.result == 'success' || needs.terraform-lint.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          terraform_wrapper: false
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+      - name: Refresh state
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform refresh -input=false || true
+      - name: Deploy ECR
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -input=false -target=module.ecr
+
+  
+  # VPCs
+  deploy-vpc:
+    needs: [detect-changes, deploy-ecr]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.terraform == 'true' &&
+      (needs.deploy-ecr.result == 'success' || needs.deploy-ecr.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          terraform_wrapper: false
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+      - name: Refresh state
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform refresh -input=false || true
+      - name: Deploy VPCs
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform apply -auto-approve -input=false \
+            -target=module.vpc_gateway \
+            -target=module.vpc_backend
+      - name: Deploy VPC Peering
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform apply -auto-approve -input=false \
+            -target=aws_vpc_peering_connection.gateway_to_backend \
+            -target=aws_route.gateway_to_backend \
+            -target=aws_route.backend_to_gateway
+
+  
+  # EKS
+  deploy-eks:
+    needs: [detect-changes, deploy-vpc]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.terraform == 'true' &&
+      (needs.deploy-vpc.result == 'success' || needs.deploy-vpc.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      gateway_cluster: ${{ steps.output.outputs.gateway_cluster }}
+      backend_cluster: ${{ steps.output.outputs.backend_cluster }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          terraform_wrapper: false
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+      - name: Refresh state
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform refresh -input=false || true
+      - name: Deploy EKS Gateway
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -input=false -target=module.eks_gateway
+      - name: Deploy EKS Backend
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -input=false -target=module.eks_backend
+      - name: Get outputs
+        id: output
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          echo "gateway_cluster=$(terraform output -raw gateway_cluster_name)" >> $GITHUB_OUTPUT
+          echo "backend_cluster=$(terraform output -raw backend_cluster_name)" >> $GITHUB_OUTPUT
+
+  
+  # Build Images & Deploy Kubernetes
+  deploy-k8s:
+    needs: [detect-changes, deploy-eks]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.kubernetes == 'true' || needs.detect-changes.outputs.terraform == 'true') &&
+      (needs.deploy-eks.result == 'success' || needs.deploy-eks.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.31.0'
+
+      # Lint Kubernetes manifests
+      - name: Lint Kubernetes manifests
+        run: |
+          echo "Installing kubeval..."
+          wget -q https://github.com/instrumenta/kubeval/releases/download/v0.16.1/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo mv kubeval /usr/local/bin/
+          
+          echo "Validating backend manifests..."
+          kubeval --strict kubernetes/backend/*.yaml
+          
+          echo "Validating gateway manifests..."
+          kubeval --strict kubernetes/gateway/*.yaml
+
+      # Get cluster names
+      - name: Get cluster names
+        id: clusters
+        run: |
+          GATEWAY="${{ needs.deploy-eks.outputs.gateway_cluster }}"
+          BACKEND="${{ needs.deploy-eks.outputs.backend_cluster }}"
+          if [ -z "$GATEWAY" ]; then GATEWAY="eks-gateway"; fi
+          if [ -z "$BACKEND" ]; then BACKEND="eks-backend"; fi
+          echo "gateway=$GATEWAY" >> $GITHUB_OUTPUT
+          echo "backend=$BACKEND" >> $GITHUB_OUTPUT
+
+      # Dry-run validation against live clusters
+      - name: Validate manifests with dry-run
+        run: |
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.backend }} --region ${{ env.AWS_REGION }}
+          kubectl apply --dry-run=server -f kubernetes/backend/
+          
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.gateway }} --region ${{ env.AWS_REGION }}
+          kubectl apply --dry-run=server -f kubernetes/gateway/
+
+      # Build and push images
+      - name: Build and push backend image
+        run: |
+          ECR_URL="${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT }}-${{ env.ENV }}-backend"
+          docker build -t $ECR_URL:${{ github.sha }} -t $ECR_URL:latest apps/backend-service/
+          docker push $ECR_URL:${{ github.sha }}
+          docker push $ECR_URL:latest
+          echo "BACKEND_IMAGE=$ECR_URL:${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Build and push gateway image
+        run: |
+          ECR_URL="${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT }}-${{ env.ENV }}-gateway"
+          docker build -t $ECR_URL:${{ github.sha }} -t $ECR_URL:latest apps/gateway-proxy/
+          docker push $ECR_URL:${{ github.sha }}
+          docker push $ECR_URL:latest
+          echo "GATEWAY_IMAGE=$ECR_URL:${{ github.sha }}" >> $GITHUB_ENV
+
+      # Deploy backend
+      - name: Deploy backend
+        id: deploy-backend
+        run: |
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.backend }} --region ${{ env.AWS_REGION }}
+          
+          kubectl apply -f kubernetes/backend/
+          kubectl set image deployment/backend-service backend=${{ env.BACKEND_IMAGE }}
+          kubectl rollout status deployment/backend-service --timeout=300s || true
+          
+          for i in {1..30}; do
+            ENDPOINT=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+            if [ -n "$ENDPOINT" ]; then
+              echo "backend_url=http://${ENDPOINT}:8080" >> $GITHUB_OUTPUT
+              echo "Backend internal endpoint: $ENDPOINT"
+              break
+            fi
+            echo "Waiting for backend internal LB... ($i/30)"
+            sleep 10
+          done
+
+      # Deploy gateway with dynamic backend URL
+      - name: Deploy gateway
+        run: |
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.gateway }} --region ${{ env.AWS_REGION }}
+          
+          BACKEND_URL="${{ steps.deploy-backend.outputs.backend_url }}"
+          if [ -z "$BACKEND_URL" ]; then
+            echo "ERROR: Backend URL not available"
+            exit 1
+          fi
+          
+          kubectl create configmap gateway-config \
+            --from-literal=backend_url="$BACKEND_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          kubectl apply -f kubernetes/gateway/deployment.yaml
+          kubectl apply -f kubernetes/gateway/service.yaml
+          
+          kubectl set image deployment/gateway-proxy proxy=${{ env.GATEWAY_IMAGE }}
+          kubectl rollout status deployment/gateway-proxy --timeout=300s || true
+
+      # Show endpoints
+      - name: Show endpoints
+        run: |
+          echo "Backend (Internal)"
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.backend }} --region ${{ env.AWS_REGION }}
+          kubectl get svc backend-service
+          
+          echo "Gateway (Public)"
+          aws eks update-kubeconfig --name ${{ steps.clusters.outputs.gateway }} --region ${{ env.AWS_REGION }}
+          GATEWAY_URL=$(kubectl get svc gateway-proxy -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "Gateway URL: http://$GATEWAY_URL"
+          
+          echo "Test Connection"
+          sleep 10
+          curl -s --max-time 10 "http://$GATEWAY_URL/health" || echo "Gateway not ready yet"
+
+  
+  # Destroy All Infrastructure
+  destroy-all:
+    if: github.event_name == 'workflow_dispatch' && inputs.destroy_all == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.31.0'
+
+      
+      # Delete K8s Services (while clusters exist)
+      - name: Delete Kubernetes services
+        run: |
+          echo "Deleting Kubernetes services"
+          for CLUSTER in eks-gateway eks-backend; do
+            if aws eks describe-cluster --name "$CLUSTER" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+              echo "Cleaning up cluster $CLUSTER..."
+              aws eks update-kubeconfig --name "$CLUSTER" --region ${{ env.AWS_REGION }}
+              kubectl delete svc --all -n default --ignore-not-found=true --timeout=60s || true
+              kubectl delete deployment --all -n default --ignore-not-found=true --timeout=60s || true
+            else
+              echo "Cluster $CLUSTER not found, skipping"
+            fi
+          done
+          echo "Waiting 2 minutes for K8s to release LBs..."
+          sleep 120
+
+      
+      # Force delete any remaining Load Balancers
+      - name: Delete Load Balancers
+        run: |
+          echo "Deleting Load Balancers"
+          for VPC_ID in $(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=${{ env.PROJECT }}" --query "Vpcs[].VpcId" --output text); do
+            echo "Processing VPC: $VPC_ID"
+            
+            for LB_ARN in $(aws elbv2 describe-load-balancers --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text 2>/dev/null); do
+              [ -z "$LB_ARN" ] && continue
+              echo "Deleting ELBv2: $LB_ARN"
+              aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" || true
+            done
+            
+            for ELB_NAME in $(aws elb describe-load-balancers --query "LoadBalancerDescriptions[?VPCId=='$VPC_ID'].LoadBalancerName" --output text 2>/dev/null); do
+              [ -z "$ELB_NAME" ] && continue
+              echo "Deleting Classic ELB: $ELB_NAME"
+              aws elb delete-load-balancer --load-balancer-name "$ELB_NAME" || true
+            done
+          done
+          
+          echo "Waiting 3 minutes for LBs to fully release ENIs..."
+          sleep 180
+
+      
+      # Delete ENIs (must be after LBs are gone)
+      - name: Delete ENIs
+        run: |
+          echo "STEP 3: Deleting ENIs"
+          for VPC_ID in $(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=${{ env.PROJECT }}" --query "Vpcs[].VpcId" --output text); do
+            echo "Processing VPC: $VPC_ID"
+            for ENI in $(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" "Name=status,Values=available" --query "NetworkInterfaces[].NetworkInterfaceId" --output text); do
+              [ -z "$ENI" ] && continue
+              echo "Deleting available ENI: $ENI"
+              aws ec2 delete-network-interface --network-interface-id "$ENI" || true
+            done
+          done
+
+      
+      # Remove SG cross-references and delete K8s SGs
+      - name: Delete Security Groups
+        run: |
+          echo "STEP 4: Deleting Security Groups"
+          for VPC_ID in $(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=${{ env.PROJECT }}" --query "Vpcs[].VpcId" --output text); do
+            echo "Processing VPC: $VPC_ID"
+            
+            K8S_SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=k8s-elb-*" --query "SecurityGroups[].GroupId" --output text)
+            
+            for SG in $K8S_SGS; do
+              [ -z "$SG" ] && continue
+              echo "Removing rules from SG: $SG"
+              aws ec2 revoke-security-group-ingress --group-id "$SG" --ip-permissions "$(aws ec2 describe-security-groups --group-ids $SG --query 'SecurityGroups[0].IpPermissions' --output json)" 2>/dev/null || true
+              aws ec2 revoke-security-group-egress --group-id "$SG" --ip-permissions "$(aws ec2 describe-security-groups --group-ids $SG --query 'SecurityGroups[0].IpPermissionsEgress' --output json)" 2>/dev/null || true
+            done
+            
+            EKS_SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=eks-cluster-sg-*" --query "SecurityGroups[].GroupId" --output text)
+            for EKS_SG in $EKS_SGS; do
+              [ -z "$EKS_SG" ] && continue
+              for K8S_SG in $K8S_SGS; do
+                [ -z "$K8S_SG" ] && continue
+                echo "Removing reference from $EKS_SG to $K8S_SG"
+                aws ec2 revoke-security-group-ingress --group-id "$EKS_SG" --source-group "$K8S_SG" --protocol all 2>/dev/null || true
+                aws ec2 revoke-security-group-egress --group-id "$EKS_SG" --source-group "$K8S_SG" --protocol all 2>/dev/null || true
+              done
+            done
+            
+            for SG in $K8S_SGS; do
+              [ -z "$SG" ] && continue
+              echo "Deleting SG: $SG"
+              aws ec2 delete-security-group --group-id "$SG" || true
+            done
+          done
+
+      
+      # Cleanup CloudWatch Log Groups
+      - name: Cleanup CloudWatch Log Groups
+        run: |
+          echo "Cleaning up CloudWatch Log Groups"
+          for LOG_GROUP in $(aws logs describe-log-groups --log-group-name-prefix "/aws/eks/" --query "logGroups[].logGroupName" --output text); do
+            echo "Deleting Log Group: $LOG_GROUP"
+            aws logs delete-log-group --log-group-name "$LOG_GROUP" || true
+          done
+
+      
+      # Terraform Destroy
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Refresh state
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform refresh -input=false || true
+
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          echo "Terraform Destroy"
+          terraform destroy -auto-approve -input=false
