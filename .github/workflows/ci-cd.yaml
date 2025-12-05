@@ -519,4 +519,4 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: |
           echo "Terraform Destroy"
-          terraform destroy -auto-approve -input=false
+          terraform destroy -auto-approve -input=false -refresh=false
