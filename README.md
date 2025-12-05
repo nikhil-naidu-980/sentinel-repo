@@ -264,6 +264,8 @@ echo "$GATEWAY_URL"
   7. Remove IAM roles from Terraform state
   8. Run terraform destroy
 
+  **PS:** This workflow has some limitations while deleting the IAM roles due to the limitation of permissions. I've added some workaround steps but it's not fully functional.
+
 #  Trade-offs and Design Decisions
  
   **VPC Peering vs Transit Gateway:**
@@ -284,6 +286,10 @@ echo "$GATEWAY_URL"
   - I have a working config running with Github OIDC instead of storing long lived secrets in GH actions
   - But that would need me to create a new role in IAM and create ARN
 
+  **Autoscaling:**
+  - No autoscaling enabled due to const constraints, but this should be good for dev
+  - In production, we'll obviously have more pods and autoscaling, but this set up is scalable
+
  ## Cost Optimization
   - Can use spot nodes to reduce the compute cost
   - Single NAT is used to save costs instead of using 2
@@ -294,11 +300,14 @@ echo "$GATEWAY_URL"
 
  - **TLS:** All communication should be encrypted with TLS on production, might need issuer controllers
  - **Observability:** For better logging and debugging. This will enable us to get better monitoring and alerting. Can use Grafana and Prometheus for example
- - **GitOps:** GitOps style deployment funcationlity using ArgoCD. It will also enable self healing and auto sync on all git commits. This will also enable easy rollbacks.
- - **Transit Gateway:** If we are scaling beyond 2/3 VPC, it's better to migrate to Transit Gateway for hub and spoke topology.
+ - **GitOps:** GitOps style deployment funcationlity using ArgoCD. It will also enable self healing and auto sync on all git commits. This will also enable easy rollbacks
+ - **Transit Gateway:** If we are scaling beyond 2/3 VPC, it's better to migrate to Transit Gateway for hub and spoke topology
  - **Disaster Recovery:** We can have primary infra in us-west-2 and a DR infra in another region with Routes3 health checks with automatic failover
  - **Secret Management:** Sync secrets from AWS secret manager or Vault, to store sensitive data or credentials 
- - **Second Container Registry:** If we enable secrete handling correctly, we can also push the images to a second container registry. In case of an incident, it would be helpful.
+ - **Second Container Registry:** If we enable secrete handling correctly, we can also push the images to a second container registry. In case of an incident, it would be helpful
+ - **Autoscaling:** If we are deploying this in prod, autoscaling would be a good addition, so that we don't have to scale it manually depending on traffic
+ -**CDN:** A Content Delivery Network infront would be a great addition to reduce latency and keep it more secured. We can also add OWASP ruleset, to make the entire infra more secure
+ -**DNS:** Instead of working with the LB endpoint, we can bind a DNS record in Route53 to LB endpoint. Any controller like externalDNS can do this
 
 
 
