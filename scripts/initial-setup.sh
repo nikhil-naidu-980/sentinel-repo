@@ -14,7 +14,7 @@ fi
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Using AWS Account: $ACCOUNT_ID"
 
-S3_BUCKET_NAME="${PROJECT_NAME}-nikhil-tfstate-${ENVIRONMENT}-721500739616"
+S3_BUCKET_NAME="${PROJECT_NAME}-nikhil-tfstate-${ENVIRONMENT}-${ACCOUNT_ID}"
 
 echo "Creating S3 bucket: $S3_BUCKET_NAME"
 if aws s3api head-bucket --bucket "$S3_BUCKET_NAME" 2>/dev/null; then
