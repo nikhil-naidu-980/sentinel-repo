@@ -491,15 +491,29 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform init -input=false
 
+      - name: Refresh state
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform refresh -input=false || true
+
       - name: Remove IAM roles from state
         working-directory: ${{ env.TF_DIR }}
         run: |
           echo "Removing IAM roles from Terraform state..."
           terraform state rm module.eks_backend.aws_iam_role.eks_cluster_role 2>/dev/null || true
           terraform state rm module.eks_backend.aws_iam_role.eks_node_role 2>/dev/null || true
+          terraform state rm module.eks_backend.aws_iam_role_policy_attachment.eks_cluster_policy 2>/dev/null || true
+          terraform state rm module.eks_backend.aws_iam_role_policy_attachment.eks_vpc_resource_controller 2>/dev/null || true
+          terraform state rm module.eks_backend.aws_iam_role_policy_attachment.eks_node_policy 2>/dev/null || true
+          terraform state rm module.eks_backend.aws_iam_role_policy_attachment.eks_cni_policy 2>/dev/null || true
+          terraform state rm module.eks_backend.aws_iam_role_policy_attachment.eks_registry_policy 2>/dev/null || true
           terraform state rm module.eks_gateway.aws_iam_role.eks_cluster_role 2>/dev/null || true
           terraform state rm module.eks_gateway.aws_iam_role.eks_node_role 2>/dev/null || true
-          echo "IAM roles removed from state and will be re-imported on next apply"
+          terraform state rm module.eks_gateway.aws_iam_role_policy_attachment.eks_cluster_policy 2>/dev/null || true
+          terraform state rm module.eks_gateway.aws_iam_role_policy_attachment.eks_vpc_resource_controller 2>/dev/null || true
+          terraform state rm module.eks_gateway.aws_iam_role_policy_attachment.eks_node_policy 2>/dev/null || true
+          terraform state rm module.eks_gateway.aws_iam_role_policy_attachment.eks_cni_policy 2>/dev/null || true
+          terraform state rm module.eks_gateway.aws_iam_role_policy_attachment.eks_registry_policy 2>/dev/null || true
+          echo "IAM roles removed from state successfully"
 
       - name: Terraform Destroy
         working-directory: ${{ env.TF_DIR }}
